@@ -1,0 +1,19 @@
+# Virtual Environment
+.venv/
+venv/
+ENV/
+
+# Python Cache & Build
+__pycache__/
+*.pyc
+*.pyo
+
+# Generated Output Data
+*.csv
+
+# OS Specific
+.DS_Store
+
+# Environment Variables & Keys
+.env
+*.pem
