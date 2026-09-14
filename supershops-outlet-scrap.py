@@ -14,7 +14,9 @@ KNOWN_BRANDS = [
     "Unimart",
     "Prince Bazar",
     "Almas Super Shop",
-    "Trust Family Super Store"
+    "Trust Family Super Store",
+    "Amana Big Bazar",
+    "Lavender Super Store"
 ]
 
 GRID_CENTERS = [
