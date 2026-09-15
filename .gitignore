@@ -11,6 +11,9 @@ __pycache__/
 # Generated Output Data
 *.csv
 
+# Exception: include sample CSV files
+!dummy-restaurants.sample.csv
+
 # OS Specific
 .DS_Store
 

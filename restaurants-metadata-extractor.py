@@ -3,7 +3,7 @@ import os
 import re
 import time
 from urllib.parse import quote_plus
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Tuple
 import pandas as pd
 from playwright.sync_api import sync_playwright
 
@@ -26,8 +26,7 @@ FOOD_KEYWORDS = {
 }
 
 def clean_text(text: Optional[str]) -> Optional[str]:
-    """Removes private use unicode icon glyphs (\uE000-\uF8FF) and normalizes whitespace."""
-    if not text:
+    if not text:                                        #Normalize address
         return None
     cleaned = re.sub(r'[\uE000-\uF8FF]', '', text)
     cleaned = re.sub(r'\s+', ' ', cleaned).strip()
@@ -35,8 +34,7 @@ def clean_text(text: Optional[str]) -> Optional[str]:
     return cleaned if cleaned else None
 
 def parse_review_count(raw_str: Optional[str]) -> Optional[int]:
-    """Parses review count values from formats like '747', '(1,250)', or '4.3K'."""
-    if not raw_str:
+    if not raw_str:                                     #Review check
         return None
     raw_str = raw_str.upper().replace(',', '').strip()
     match = re.search(r'([\d\.]+)\s*([KM])?', raw_str)
@@ -53,25 +51,21 @@ def parse_review_count(raw_str: Optional[str]) -> Optional[int]:
             return None
     return None
 
-def extract_reviews_from_text(text: Optional[str]) -> int:
-    """Robustly extracts total review count integer from multi-line card text."""
+def extract_reviews_from_text(text: Optional[str]) -> int:  #extracts total review count integer from multi-line card text
     if not text:
         return 0
-    # Pattern 1: (4,337) or (4.3K)
     m1 = re.search(r'\(([\d\.,]+[KM]?)\)', text)
     if m1:
         val = parse_review_count(m1.group(1))
         if val is not None:
             return val
-            
-    # Pattern 2: 4,337 reviews or 4.3K reviews
+
     m2 = re.search(r'([\d\.,]+[KM]?)\s*reviews?', text, re.IGNORECASE)
     if m2:
         val = parse_review_count(m2.group(1))
         if val is not None:
             return val
 
-    # Pattern 3: rating review count combo e.g. 4.2 ★ 4,337
     m3 = re.search(r'[\d\.]+\s*★\s*\(?([\d\.,]+[KM]?)\)?', text)
     if m3:
         val = parse_review_count(m3.group(1))
@@ -80,57 +74,90 @@ def extract_reviews_from_text(text: Optional[str]) -> int:
 
     return 0
 
-def normalize_name(s: str) -> str:
-    """Strips punctuation and apostrophes for accurate token matching."""
+def extract_rating_from_text(text: Optional[str]) -> Optional[float]:
+    """
+    Extracts the star rating (e.g. 4.5) from a search-result card's text.
+    NOTE: card layout puts the rating immediately before the review-count
+    parenthetical or the star glyph, so we anchor on those patterns first
+    before falling back to a bare '4.5'-style token, to avoid accidentally
+    picking up an unrelated number (address, price level, etc).
+    """
+    if not text:
+        return None
+
+    m1 = re.search(r'([1-5]\.\d)\s*\(', text)
+    if m1:
+        return float(m1.group(1))
+
+    m2 = re.search(r'([1-5]\.\d)\s*★', text)
+    if m2:
+        return float(m2.group(1))
+
+    m3 = re.search(r'\b([1-5]\.\d)\b', text)
+    if m3:
+        return float(m3.group(1))
+
+    return None
+
+def normalize_name(s: str) -> str:         #Accurate token matching
     if not s:
         return ""
     s = s.lower().replace("'", "").replace("’", "")
     return re.sub(r'[^a-z0-9\s]', ' ', s)
 
 def is_name_match(search_name: str, candidate_title: str) -> bool:
-    """Checks if search_name tokens exist in candidate_title."""
     if not search_name or not candidate_title:
         return False
-        
+
     s_norm = normalize_name(search_name)
     c_norm = normalize_name(candidate_title)
-    
+
     if c_norm.strip() in ["results", "search results", "places"]:
         return False
 
     s_words = [w for w in s_norm.split() if w]
     c_words = set(c_norm.split())
-    
+
     if not s_words:
         return False
 
     return all(w in c_words for w in s_words)
 
-def is_food_establishment(category_or_text: str, title_str: str) -> bool:
-    """Ensures place belongs to a restaurant/food category."""
-    combined = f"{category_or_text or ''} {title_str or ''}".lower()
-    return any(keyword in combined for keyword in FOOD_KEYWORDS)
+def extract_coords(url: Optional[str]) -> Optional[Tuple[float, float]]:    #Pulls (lat, lng) out of a Google Maps URL. Checks for both '@lat,lng' and '!3dlat!4dlng' formats.
+    if not url:
+        return None
+        
+    # 1. Try standard @lat,lng format
+    m1 = re.search(r'@(-?\d+\.\d+),(-?\d+\.\d+)', url)
+    if m1:
+        return float(m1.group(1)), float(m1.group(2))
+        
+    # 2. Try Google Maps data parameter format (!3d<lat>!4d<lng>)
+    m2 = re.search(r'!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)', url)
+    if m2:
+        return float(m2.group(1)), float(m2.group(2))
+        
+    return None
 
-def is_in_bangladesh(url: str, address: Optional[str]) -> bool:
+def coords_in_bangladesh(lat: float, lng: float) -> bool:
+    return (BANGLADESH_BOUNDS["min_lat"] <= lat <= BANGLADESH_BOUNDS["max_lat"] and
+            BANGLADESH_BOUNDS["min_lng"] <= lng <= BANGLADESH_BOUNDS["max_lng"])
+
+def is_in_bangladesh(url: Optional[str], address: Optional[str]) -> bool:
     """Validates if coordinates or address belong to Bangladesh."""
     if not url and not address:
         return True
-    coord_match = re.search(r'@(-?\d+\.\d+),(-?\d+\.\d+)', url or '')
-    if coord_match:
-        lat, lng = float(coord_match.group(1)), float(coord_match.group(2))
-        if (BANGLADESH_BOUNDS["min_lat"] <= lat <= BANGLADESH_BOUNDS["max_lat"] and
-            BANGLADESH_BOUNDS["min_lng"] <= lng <= BANGLADESH_BOUNDS["max_lng"]):
-            return True
-        return False
-    
-    addr_lower = (address or "").lower()
-    bd_cities = ["bangladesh", "dhaka", "chittagong", "chattogram", "sylhet", "rajshahi", 
-                 "khulna", "barisal", "rangpur", "mymensingh", "comilla", "gazipur", "mirpur",
-                 "dhanmondi", "uttara", "gulshan", "banani", "motijheel"]
-    return any(city in addr_lower for city in bd_cities)
 
-def load_target_restaurants() -> List[str]:
-    """Load target list from main CSV, fallback to sample CSV, or default array."""
+    # 1. Check if the URL provides coordinates within the boundary box
+    coords = extract_coords(url)
+    if coords:
+        return coords_in_bangladesh(*coords)
+
+    # 2. Fallback: Check if the exact country name is in the address string
+    addr_lower = (address or "").lower()
+    return "bangladesh" in addr_lower
+
+def load_target_restaurants() -> List[str]: #Load target list from main CSV, fallback to sample CSV, or default array.
     if os.path.exists(CSV_PATH):
         print(f"Loading targets from '{CSV_PATH}'...")
         return pd.read_csv(CSV_PATH)["name"].tolist()
@@ -140,6 +167,25 @@ def load_target_restaurants() -> List[str]:
     else:
         print(f"Notice: No CSV file found. Using default fallback list.")
         return DEFAULT_RESTAURANTS
+
+def select_best_candidate(candidates: List[Dict]) -> Optional[Dict]:
+    """
+    Picks the best branch among name-matched search-result candidates.
+    Selection rule: prefer candidates that fall within the Bangladesh boundary; 
+    among those, prefer highest rating, then highest review count as the tiebreaker.
+    """
+    if not candidates:
+        return None
+
+    known_in_bd = [c for c in candidates if c["in_bd"] is True]
+    pool = known_in_bd if known_in_bd else candidates
+
+    def score(c):
+        rating = c["rating"] if c["rating"] is not None else -1.0
+        reviews = c["reviews"] if c["reviews"] is not None else -1
+        return (rating, reviews)
+
+    return max(pool, key=score)
 
 def run_scraper():
     restaurant_names = load_target_restaurants()
@@ -158,7 +204,7 @@ def run_scraper():
         for index, raw_name in enumerate(restaurant_names, 1):
             search_query = f"{raw_name.strip()}, Bangladesh"
             print(f"\n[{index}/{len(restaurant_names)}] Searching: {search_query}")
-            
+
             record = {
                 "search_name": raw_name,
                 "place_name": None,
@@ -175,72 +221,130 @@ def run_scraper():
                 search_url = f"https://www.google.com/maps/search/{encoded_query}?hl=en"
                 page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
 
-                # Dismiss consent popup if present
                 consent_btn = page.locator("button:has-text('Accept all'), button:has-text('I agree')").first
                 if consent_btn.is_visible(timeout=1500):
                     consent_btn.click()
 
-                # Allow Google Maps search UI to settle
-                page.wait_for_timeout(3000)
+                place_link_selector = "a[href*='/maps/place/']"
+                try:
+                    page.locator(place_link_selector).first.wait_for(state="attached", timeout=8000)
+                except Exception:
+                    print(f"  [debug] no {place_link_selector} link attached within 8s")
 
-                feed_element = page.locator("div[role='feed']").first
-                if feed_element.is_visible(timeout=3000):
-                    # Scroll feed to lazy-load top branches
-                    for _ in range(4):
-                        feed_element.evaluate("el => el.scrollBy(0, 800)")
-                        page.wait_for_timeout(400)
+                page.wait_for_timeout(1000)
+                try:
+                    page.mouse.wheel(0, 2000)
+                    page.wait_for_timeout(600)
+                except Exception:
+                    pass
 
-                    results_locators = page.locator("div.Nv2pk, a[href*='/maps/place/']")
-                    results_count = results_locators.count()
+                anchors = page.locator(place_link_selector)
+                anchor_count = anchors.count()
+                print(f"  [debug] {anchor_count} place link(s) detected on page")
 
-                    best_index = -1
-                    max_reviews = -1
+                already_on_place_page = anchor_count == 0 and "/maps/place/" in page.url
+                candidates = []
+                matched_count = 0
+                seen_hrefs = set()
 
-                    for i in range(min(results_count, 15)):
-                        item = results_locators.nth(i)
-                        card_text = item.inner_text()
+                if already_on_place_page:
+                    print(f"  [debug] no place links found but current URL is already a place page - "
+                          f"treating it as the sole candidate (url: {page.url})")
+                else:
+                    for i in range(min(anchor_count, 20)):
+                        anchor = anchors.nth(i)
+                        try:
+                            href = anchor.get_attribute("href")
+                        except Exception:
+                            href = None
 
-                        # Extract card title
-                        candidate_title = ""
-                        title_el = item.locator(".fontHeadlineSmall, div.qBF1Pd, div.fontTitleMedium").first
-                        if title_el.is_visible():
-                            candidate_title = clean_text(title_el.inner_text()) or ""
-                        if not candidate_title:
-                            candidate_title = clean_text(item.get_attribute("aria-label")) or ""
-                        if not candidate_title and card_text:
-                            candidate_title = clean_text(card_text.split('\n')[0]) or ""
-
-                        if not is_name_match(raw_name, candidate_title):
+                        if not href or href in seen_hrefs:
                             continue
+                        seen_hrefs.add(href)
 
-                        rev_count = extract_reviews_from_text(card_text)
+                        aria_label = clean_text(anchor.get_attribute("aria-label")) or ""
 
-                        if rev_count >= max_reviews:
-                            max_reviews = rev_count
-                            best_index = i
+                        anchor_text = ""
+                        try:
+                            anchor_text = anchor.inner_text() or ""
+                        except Exception:
+                            anchor_text = ""
 
-                    if best_index != -1:
-                        target = results_locators.nth(best_index)
-                        link_inside = target.locator("a[href*='/maps/place/']").first
-                        if link_inside.is_visible():
-                            link_inside.click()
-                        else:
-                            target.click()
-                        page.wait_for_timeout(3000)
+                        try:
+                            card_text = anchor.evaluate(
+                                """el => {
+                                    let node = el;
+                                    for (let i = 0; i < 8 && node; i++) {
+                                        const text = node.innerText || '';
+                                        if (/[1-5]\\.\\d/.test(text) && text.length > 0 && text.length < 800) {
+                                            return text;
+                                        }
+                                        node = node.parentElement;
+                                    }
+                                    return el.innerText || '';
+                                }"""
+                            ) or ""
+                        except Exception:
+                            card_text = anchor_text
+
+                        candidate_title = aria_label or clean_text(anchor_text) or ""
+                        search_text_for_stats = card_text or aria_label or anchor_text
+
+                        is_match = is_name_match(raw_name, candidate_title)
+                        if is_match:
+                            matched_count += 1
+                            rev_count = extract_reviews_from_text(search_text_for_stats)
+                            rating_val = extract_rating_from_text(search_text_for_stats)
+                            coords = extract_coords(href)
+                            in_bd = coords_in_bangladesh(*coords) if coords else None
+
+                            candidates.append({
+                                "index": i,
+                                "title": candidate_title,
+                                "rating": rating_val,
+                                "reviews": rev_count,
+                                "href": href,
+                                "in_bd": in_bd,
+                            })
+
+                    print(f"  [debug] {matched_count} of {len(seen_hrefs)} unique link(s) name-matched '{raw_name}'")
+
+                if already_on_place_page:
+                    pass
+                else:
+                    best = select_best_candidate(candidates)
+
+                    if best is not None and best.get("href"):
+                        print(f"  [debug] selected candidate: title='{best['title']}' "
+                            f"rating={best['rating']} reviews={best['reviews']} in_bd={best['in_bd']}")
+                        
+                        page.goto(best["href"], wait_until="domcontentloaded", timeout=30000)
+                        page.wait_for_timeout(2000)
                     else:
                         print(f"  -> Skipping: No matching search result found for '{raw_name}'.")
                         results.append(record)
                         continue
 
-                # Wait for detail view H1 title to populate
                 h1_text = ""
-                for _ in range(10):
-                    h1_el = page.locator("h1").first
-                    if h1_el.is_visible():
-                        val = clean_text(h1_el.inner_text())
-                        if val and val.lower() not in ["results", "search results", "places"]:
-                            h1_text = val
-                            break
+                header_selectors = [
+                    "h1.fontHeadlineLarge",
+                    "h1.DUwfx",
+                    "h1[class*='fontHeadline']",
+                    "h1",
+                    "div.DUwfx",
+                    ".fontTitleLarge"
+                ]
+
+                for _ in range(12):
+                    for sel in header_selectors:
+                        el = page.locator(sel).first
+                        if el.is_visible():
+                            val = clean_text(el.inner_text())
+                            if val and val.lower() not in ["results", "search results", "places"]:
+                                h1_text = val
+                                break
+                    if h1_text:
+                        break
                     page.wait_for_timeout(500)
 
                 if not h1_text:
@@ -255,32 +359,27 @@ def run_scraper():
                     results.append(record)
                     continue
 
-                # Rating Extraction
-                rating_el = page.locator("span[aria-label*='star'], div[aria-label*='star'], span.ceA1da, div.F7L83c").first
+                rating_el = page.locator("div.F7L83c, span.ceA1da, div.fontBodyMedium span[aria-hidden='true']").first
                 if rating_el.is_visible(timeout=1500):
-                    aria_val = rating_el.get_attribute("aria-label") or rating_el.inner_text()
-                    match = re.search(r'([\d\.]+)', aria_val or '')
-                    if match and float(match.group(1)) <= 5.0:
+                    val = clean_text(rating_el.inner_text() or rating_el.get_attribute("aria-label"))
+                    match = re.search(r'([1-5]\.\d)', val or '')
+                    if match:
                         record["rating"] = match.group(1)
 
-                # Review Count Extraction
                 reviews_el = page.locator("button[aria-label*='reviews'], span[aria-label*='reviews']").first
                 if reviews_el.is_visible(timeout=1500):
                     aria_val = reviews_el.get_attribute("aria-label") or reviews_el.inner_text()
                     record["reviews_count"] = parse_review_count(aria_val)
 
-                # Address Extraction
                 address_el = page.locator("button[data-item-id='address']").first
                 if address_el.is_visible(timeout=1500):
                     record["address"] = clean_text(address_el.inner_text())
 
-                # Geofence Validation
                 if not is_in_bangladesh(page.url, record["address"]):
                     print(f"  -> Skipping: Location '{record['place_name']}' is outside Bangladesh.")
                     results.append(record)
                     continue
 
-                # Phone & Website Extraction
                 phone_el = page.locator("button[data-item-id*='phone']").first
                 if phone_el.is_visible(timeout=1500):
                     record["phone"] = clean_text(phone_el.inner_text())
@@ -289,42 +388,84 @@ def run_scraper():
                 if website_el.is_visible(timeout=1500):
                     record["website"] = website_el.get_attribute("href")
 
-                # About Tab Metadata Extraction
                 about_tab = page.locator("button[role='tab']:has-text('About')").first
                 if about_tab.is_visible(timeout=2000):
                     about_tab.click()
                     page.wait_for_timeout(1000)
 
-                    panel = page.locator("div.m6QErb[role='region']").first
-                    if not panel.is_visible():
-                        panel = page.locator("div.m6QErb").first
-
-                    if panel.is_visible():
-                        for _ in range(3):
-                            panel.evaluate("el => el.scrollBy(0, 500)")
-                            page.wait_for_timeout(200)
+                    panel_selectors = [
+                        "div[role='tabpanel']",
+                        "div.m6QErb[role='region']",
+                        "div.m6QErb",
+                    ]
+                    panel = None
+                    for sel in panel_selectors:
+                        candidate_panel = page.locator(sel).first
+                        if candidate_panel.count() > 0 and candidate_panel.is_visible():
+                            panel = candidate_panel
+                            break
 
                     about_dict = {}
-                    section_headers = page.locator("h2")
-                    for i in range(section_headers.count()):
-                        header_text = clean_text(section_headers.nth(i).inner_text())
-                        if not header_text or header_text.lower() in ["about", "overview"]:
-                            continue
 
-                        parent = section_headers.nth(i).locator("xpath=ancestor::div[contains(@class, 'iP2WAd') or contains(@class, 'm6QErb')][1]")
-                        items = parent.locator("span, div.fontBodyMedium").all_inner_texts()
-                        
-                        clean_items = []
-                        for item in items:
-                            c_item = clean_text(item)
-                            if c_item and c_item != header_text and len(c_item) < 60:
-                                if c_item not in clean_items:
-                                    clean_items.append(c_item)
+                    if panel:
+                        section_selectors = ["div.iP2WAd", "div.g27P1d", "div:has(> h2)"]
+                        max_scroll_steps = 15
+                        stale_streak = 0
+                        prev_category_count = -1
 
-                        if clean_items:
-                            about_dict[header_text] = clean_items
+                        for _step in range(max_scroll_steps):
+                            sections = []
+                            for sel in section_selectors:
+                                found = panel.locator(sel).all()
+                                if found:
+                                    sections = found
+                                    break
+
+                            for section in sections:
+                                header_text = None
+                                for hsel in ["h2", "div.fontTitleMedium"]:
+                                    h_el = section.locator(hsel).first
+                                    if h_el.count() > 0 and h_el.is_visible():
+                                        header_text = clean_text(h_el.inner_text())
+                                        if header_text:
+                                            break
+
+                                if not header_text or header_text.lower() in ["about", "overview"]:
+                                    continue
+
+                                clean_items = list(about_dict.get(header_text, []))
+
+                                item_els = section.locator("li[aria-label], span[aria-label]").all()
+                                for el in item_els:
+                                    label = clean_text(el.get_attribute("aria-label"))
+                                    if label and label != header_text and label not in clean_items:
+                                        clean_items.append(label)
+
+                                if not clean_items:
+                                    items = section.locator("li, span, div.fontBodyMedium").all_inner_texts()
+                                    for item_text in items:
+                                        c_item = clean_text(item_text)
+                                        if c_item and c_item != header_text and len(c_item) < 60 and c_item not in clean_items:
+                                            clean_items.append(c_item)
+
+                                if clean_items:
+                                    about_dict[header_text] = clean_items
+
+                            if len(about_dict) == prev_category_count:
+                                stale_streak += 1
+                            else:
+                                stale_streak = 0
+                            prev_category_count = len(about_dict)
+
+                            if stale_streak >= 3:
+                                break
+
+                            panel.evaluate("el => el.scrollBy(0, 400)")
+                            page.wait_for_timeout(300)
 
                     record["about_metadata"] = json.dumps(about_dict, ensure_ascii=False)
+                    print(f"  [debug] about section: {len(about_dict)} categor(y/ies) captured "
+                          f"after {_step + 1 if panel else 0} scroll step(s): {list(about_dict.keys())}")
 
             except Exception as e:
                 print(f"Error processing {raw_name}: {e}")
@@ -336,7 +477,7 @@ def run_scraper():
 
     df_output = pd.DataFrame(results)
     df_output.to_csv("scraped_restaurants_metadata.csv", index=False, encoding="utf-8-sig")
-    
+
     with open("scraped_restaurants_metadata.json", "w", encoding="utf-8") as f:
         json.dump(results, f, ensure_ascii=False, indent=2)
 
