@@ -28,10 +28,10 @@ Another Python tool using **Playwright** to scrap metadata of restaurants (ratin
 ---
 
 ## Features
-**Read Restaurants Names & Search On Google Map:** From a csv file that contains a list of restaurants and search the name of the search bar of google map.
-**Selection Criteria:** Select the names from suggestions that only contains food keywords ("restaurant", "food", "cafe" etc). Since a location boundary is set earlier, it'll also check whether the restaurant falls within that boundary or not. Then from that filter, only check the one with highest rating followed by highest number of reviews incase the ratings are tied.
-**Extract Metadata:** After the screening, collect the place name, address, location, phone, website and other contents from "About" section of the restaurant card.
-**Store Data:** Finally dump those info into both csv and json format.
+* **Read Restaurants Names & Search On Google Map:** From a csv file that contains a list of restaurants and search the name of the search bar of google map.
+* **Selection Criteria:** Select the names from suggestions that only contains food keywords ("restaurant", "food", "cafe" etc). Since a location boundary is set earlier, it'll also check whether the restaurant falls within that boundary or not. Then from that filter, only check the one with highest rating followed by highest number of reviews incase the ratings are tied.
+* **Extract Metadata:** After the screening, collect the place name, address, location, phone, website and other contents from "About" section of the restaurant card.
+* **Store Data:** Finally dump those info into both csv and json format.
 
 ---
 
