@@ -1,5 +1,6 @@
 import json
 import os
+import random
 import re
 import time
 from urllib.parse import quote_plus
@@ -213,6 +214,8 @@ def run_scraper():
                 "address": None,
                 "phone": None,
                 "website": None,
+                "latitude": None,
+                "longitude": None,
                 "about_metadata": "{}"
             }
 
@@ -232,11 +235,54 @@ def run_scraper():
                     print(f"  [debug] no {place_link_selector} link attached within 8s")
 
                 page.wait_for_timeout(1000)
-                try:
-                    page.mouse.wheel(0, 2000)
-                    page.wait_for_timeout(600)
-                except Exception:
-                    pass
+
+                # Rather than a single fixed nudge (which only ever surfaces
+                # the first ~15-20 branches Google renders up front), scroll
+                # the results feed all the way to the bottom repeatedly -
+                # the same proven approach as the supershop-outlet scraper -
+                # so every branch gets loaded before we pick the best one.
+                feed_selector = "div[role='feed']"
+                feed_locator = page.locator(feed_selector).first
+                has_feed = feed_locator.count() > 0
+                if has_feed:
+                    try:
+                        has_feed = feed_locator.is_visible(timeout=2000)
+                    except Exception:
+                        has_feed = False
+
+                if has_feed:
+                    previous_height = 0
+                    max_scroll_iterations = 40  # safety cap against a runaway loop
+                    scroll_iterations_used = 0
+                    for _ in range(max_scroll_iterations):
+                        scroll_iterations_used += 1
+                        try:
+                            feed_locator.evaluate("el => el.scrollTop = el.scrollHeight")
+                        except Exception:
+                            break
+                        page.wait_for_timeout(random.randint(1200, 2000))
+                        try:
+                            current_height = feed_locator.evaluate("el => el.scrollHeight")
+                        except Exception:
+                            current_height = previous_height
+                        try:
+                            end_visible = page.locator("text=You've reached the end of the list.").is_visible()
+                        except Exception:
+                            end_visible = False
+                        if current_height == previous_height or end_visible:
+                            break
+                        previous_height = current_height
+                    print(f"  [debug] infinite-scrolled results feed ({scroll_iterations_used} step(s))")
+                else:
+                    # No virtualized feed present - either a short static
+                    # list (already fully rendered) or a page that
+                    # auto-navigated straight to a single place. A small
+                    # nudge is enough to trigger any remaining lazy content.
+                    try:
+                        page.mouse.wheel(0, 2000)
+                        page.wait_for_timeout(600)
+                    except Exception:
+                        pass
 
                 anchors = page.locator(place_link_selector)
                 anchor_count = anchors.count()
@@ -251,7 +297,11 @@ def run_scraper():
                     print(f"  [debug] no place links found but current URL is already a place page - "
                           f"treating it as the sole candidate (url: {page.url})")
                 else:
-                    for i in range(min(anchor_count, 20)):
+                    # No small cap here anymore: the infinite-scroll above is
+                    # what's meant to load every branch, so process all of
+                    # them. Keep a generous ceiling purely as a safety net
+                    # against a pathological page with an unbounded feed.
+                    for i in range(min(anchor_count, 300)):
                         anchor = anchors.nth(i)
                         try:
                             href = anchor.get_attribute("href")
@@ -374,6 +424,11 @@ def run_scraper():
                 address_el = page.locator("button[data-item-id='address']").first
                 if address_el.is_visible(timeout=1500):
                     record["address"] = clean_text(address_el.inner_text())
+
+                final_coords = extract_coords(page.url)
+                if final_coords:
+                    record["latitude"], record["longitude"] = final_coords
+                print(f"  [debug] coordinates: lat={record['latitude']} lng={record['longitude']}")
 
                 if not is_in_bangladesh(page.url, record["address"]):
                     print(f"  -> Skipping: Location '{record['place_name']}' is outside Bangladesh.")

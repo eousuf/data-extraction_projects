@@ -23,12 +23,23 @@ An asynchronous Python tool using **Playwright** to scrape chain super shop loca
 
 ## Bangladesh Popular Restaurants Metadata Scraper
 
+Another Python tool using **Playwright** to scrap metadata of restaurants (rating, number of reviews, phone, website, coordinate, address, service options, accessibility, payment options etc.) from google map. 
+
+---
+
+## Features
+**Read Restaurants Names & Search On Google Map:** From a csv file that contains a list of restaurants and search the name of the search bar of google map.
+**Selection Criteria:** Select the names from suggestions that only contains food keywords ("restaurant", "food", "cafe" etc). Since a location boundary is set earlier, it'll also check whether the restaurant falls within that boundary or not. Then from that filter, only check the one with highest rating followed by highest number of reviews incase the ratings are tied.
+**Extract Metadata:** After the screening, collect the place name, address, location, phone, website and other contents from "About" section of the restaurant card.
+**Store Data:** Finally dump those info into both csv and json format.
+
 ---
 
 ## Requirements
 
 * Python 3.8+
 * Playwright
+* A list of restaurant in CSV format. (A dummy CSV file is given)
 
 ---
 
